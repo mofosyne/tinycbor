@@ -1,0 +1,99 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+        
+          - qt-version: 5.12.1
+            os: linux
+            dist: xenial 
+            cc: gcc
+            cxx: g++
+            env:
+              CFLAGS: "-Os -march=native"
+              LDFLAGS: "-Wl,--no-undefined -lm"
+
+          - qt-version: 5.12.1 
+            os: linux
+            dist: xenial
+            cc: clang
+            cxx: clang++
+            env:
+              CFLAGS: "-Oz"
+              LDFLAGS: "-Wl,--no-undefined -lm"
+              MAKEFLAGS: -s
+
+          # Add other builds from matrix
+            
+    steps:
+    
+    - uses: actions/checkout@v2
+
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v2
+      with:
+        version: ${{ matrix.qt-version }}
+       
+    - name: Install apt packages  
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qt512base valgrind doxygen
+
+    - name: Configure
+      run: |
+        eval "${{ matrix.cc }} && ${{ matrix.cxx }}"
+        make -f Makefile.configure configure
+
+    - name: Build
+      env:
+        CFLAGS: "${{ matrix.env.CFLAGS }}"
+      run: |
+        make lib/libtinycbor.a
+
+    - name: Check size
+      run: |
+        size lib/libtinycbor.a
+
+    - name: Clean
+      run: |
+        make -s clean
+
+    - name: Build debug
+      env:
+        CFLAGS: "-O0 -g"
+      run: |
+        make lib/libtinycbor.a
+
+    - name: Tests
+      env:
+        LDFLAGS: "${{ matrix.env.LDFLAGS }}"
+        LDLIBS: "${{ matrix.env.LDLIBS }}"  
+      run: |
+        grep -q freestanding-pass .config || make tests/Makefile
+        grep -q freestanding-pass .config || (cd tests && make check)
+
+    - name: Clean
+      run: |
+        make -s clean
+        
+  docs:
+
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+    
+    - uses: actions/checkout@v2
+
+    - name: Build docs
+      run: ./scripts/update-docs.sh
