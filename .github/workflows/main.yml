@@ -1,80 +1,104 @@
-name: CI
-on:
-  push:
-    branches: [main]
-  pull_request:
+name: CI Workflow
+
+on: [push, pull_request]
+
+env:
+  DEFAULT_PATH: /opt/qt*/bin
 
 jobs:
-
-  build:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        qt-version: [5.12.1]
-        os: [linux]
-        dist: [xenial]
-        cc: [gcc, clang]
-        cxx: [g++, clang++]
-        CFLAGS: ["-Os -march=native", "-Oz"]
-        LDFLAGS: ["-Wl,--no-undefined -lm", "-Wl,--no-undefined -lm"]
-        MAKEFLAGS: ["", "-s"]
-        # Add other configurations as needed
-
+  setup:
+    runs-on: ubuntu-16.04
     steps:
-    - uses: actions/checkout@v2
-
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v2
-      with:
-        version: ${{ matrix.qt-version }}
-
-    - name: Install apt packages  
+    - name: Checkout repository
+      uses: actions/checkout@v2
+      
+    - name: Setup environment and install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y qtbase5-dev valgrind doxygen
+        sudo apt-get install -y qt512base valgrind doxygen
+        echo "${DEFAULT_PATH}:$PATH" >> $GITHUB_ENV
 
-    - name: Configure
+    - name: Cache dependencies
+      uses: actions/cache@v2
+      with:
+        path: |
+          /opt/qt*
+          /usr/bin/valgrind
+          /usr/bin/doxygen
+        key: dependencies-ubuntu-16.04-qt512base
+
+  build-lib:
+    needs: setup
+    runs-on: ubuntu-16.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+            cflags: "-Os"
+            ldflags: "-Wl,--no-undefined -lm"
+            qmakespec: "linux-g++"
+            eval: "CC=gcc && CXX=g++"
+          - cc: clang
+            cxx: clang++
+            cflags: "-Oz"
+            ldflags: "-Wl,--no-undefined -lm"
+            qmakespec: "linux-clang"
+            eval: "CC=clang && CXX=clang++"
+    steps:
+    - name: Restore cache
+      uses: actions/cache@v2
+      with:
+        path: |
+          /opt/qt*
+          /usr/bin/valgrind
+          /usr/bin/doxygen
+        key: dependencies-ubuntu-16.04-qt512base
+
+    - name: Build libtinycbor.a
       run: |
-        eval "CC=${{ matrix.cc }} && CXX=${{ matrix.cxx }}"
-        make -f Makefile.configure configure
+        PATH=`echo /opt/qt*/bin`:$PATH
+        eval "${{ matrix.eval }}"
+        make -s -f Makefile.configure configure | tee .config
+        make -k \
+          CFLAGS="${{ matrix.cflags }} -march=native -g1 -Wall -Wextra -Werror" \
+          CPPFLAGS="-DNDEBUG -DCBOR_ENCODER_WRITER_CONTROL=-1 -DCBOR_PARSER_READER_CONTROL=-1" \
+          lib/libtinycbor.a
+        size lib/libtinycbor.a | tee sizes
 
-    - name: Build
-      env:
-        CFLAGS: "${{ matrix.CFLAGS }}"
+  run-valgrind:
+    needs: build-lib
+    runs-on: ubuntu-16.04
+    strategy:
+      fail-fast: false
+      matrix:
+        testargs: ['-silent']
+    steps:
+    - name: Restore cache
+      uses: actions/cache@v2
+      with:
+        path: |
+          /opt/qt*
+          /usr/bin/valgrind
+          /usr/bin/doxygen
+        key: dependencies-ubuntu-16.04-qt512base
+
+    - name: Build For Test
       run: |
-        make lib/libtinycbor.a
+        make -k
+        CFLAGS="$CFLAGS -O0 -g"
+        LDFLAGS="$LDFLAGS" ${LDLIBS+LDLIBS="$LDLIBS"}
 
-    - name: Check size
-      run: |
-        size lib/libtinycbor.a
-
-    - name: Clean
-      run: |
-        make -s clean
-
-    - name: Build debug
-      env:
-        CFLAGS: "-O0 -g"
-      run: |
-        make lib/libtinycbor.a
-
-    - name: Tests
-      env:
-        LDFLAGS: "${{ matrix.LDFLAGS }}"
-        # Add any other required environment variables
+    - name: Run tests
       run: |
         grep -q freestanding-pass .config || make tests/Makefile
-        grep -q freestanding-pass .config || (cd tests && make check)
+        grep -q freestanding-pass .config || (cd tests && make TESTARGS=${{ matrix.testargs }} check -k TESTRUNNER=`which valgrind 2>/dev/null`)
 
-    - name: Clean
-      run: |
-        make -s clean
-        
   docs:
-    runs-on: ubuntu-latest
+    needs: build-lib
+    runs-on: ubuntu-16.04
     if: github.ref == 'refs/heads/main'
     steps:
-    - uses: actions/checkout@v2
-
-    - name: Build docs
-      run: ./scripts/update-docs.sh
+      - name: Build documentation
+        run: ./scripts/update-docs.sh
