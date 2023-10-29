@@ -7,43 +7,27 @@ on:
 jobs:
 
   build:
-
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
-        include:
-        
-          - qt-version: 5.12.1
-            os: linux
-            dist: xenial 
-            cc: gcc
-            cxx: g++
-            env:
-              CFLAGS: "-Os -march=native"
-              LDFLAGS: "-Wl,--no-undefined -lm"
+        qt-version: [5.12.1]
+        os: [linux]
+        dist: [xenial]
+        cc: [gcc, clang]
+        cxx: [g++, clang++]
+        CFLAGS: ["-Os -march=native", "-Oz"]
+        LDFLAGS: ["-Wl,--no-undefined -lm", "-Wl,--no-undefined -lm"]
+        MAKEFLAGS: ["", "-s"]
+        # Add other configurations as needed
 
-          - qt-version: 5.12.1 
-            os: linux
-            dist: xenial
-            cc: clang
-            cxx: clang++
-            env:
-              CFLAGS: "-Oz"
-              LDFLAGS: "-Wl,--no-undefined -lm"
-              MAKEFLAGS: -s
-
-          # Add other builds from matrix
-            
     steps:
-    
     - uses: actions/checkout@v2
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v2
       with:
         version: ${{ matrix.qt-version }}
-       
+
     - name: Install apt packages  
       run: |
         sudo apt-get update
@@ -51,12 +35,12 @@ jobs:
 
     - name: Configure
       run: |
-        eval "${{ matrix.cc }} && ${{ matrix.cxx }}"
+        eval "CC=${{ matrix.cc }} && CXX=${{ matrix.cxx }}"
         make -f Makefile.configure configure
 
     - name: Build
       env:
-        CFLAGS: "${{ matrix.env.CFLAGS }}"
+        CFLAGS: "${{ matrix.CFLAGS }}"
       run: |
         make lib/libtinycbor.a
 
@@ -76,8 +60,8 @@ jobs:
 
     - name: Tests
       env:
-        LDFLAGS: "${{ matrix.env.LDFLAGS }}"
-        LDLIBS: "${{ matrix.env.LDLIBS }}"  
+        LDFLAGS: "${{ matrix.LDFLAGS }}"
+        # Add any other required environment variables
       run: |
         grep -q freestanding-pass .config || make tests/Makefile
         grep -q freestanding-pass .config || (cd tests && make check)
@@ -87,12 +71,9 @@ jobs:
         make -s clean
         
   docs:
-
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-
     steps:
-    
     - uses: actions/checkout@v2
 
     - name: Build docs
